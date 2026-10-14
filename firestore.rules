@@ -1,0 +1,90 @@
+rules_version = '2';
+// Regras de segurança — Avaliação de Desempenho Raguife
+// Publique no Console do Firebase → Firestore Database → Regras.
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function logado() { return request.auth != null; }
+    function caminho(c, id) { return /databases/$(db)/documents/$(c)/$(id); }
+    function temUsuario() { return logado() && exists(caminho('usuarios', request.auth.uid)); }
+    function eu() { return get(caminho('usuarios', request.auth.uid)).data; }
+    function perfil(p) { return temUsuario() && eu().perfis.hasAny([p]); }
+    function rh() { return perfil('rh'); }
+    function minhaMat() { return eu().matricula; }
+    function sistemaNovo() { return !exists(caminho('config', 'geral')); }
+    function soMudou(campos) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(campos); }
+
+    // Configuração geral (só indica se o sistema já foi configurado e o ciclo ativo)
+    match /config/{id} {
+      allow read: if true;
+      allow create: if logado() && id == 'geral' && sistemaNovo()
+        && getAfter(caminho('usuarios', request.auth.uid)).data.perfis.hasAny(['rh']);
+      allow update, delete: if rh();
+    }
+
+    // Matrícula ou CPF → login interno (consultado na tela de login, antes de entrar)
+    match /logins/{mat} {
+      allow get: if true;
+      allow list: if rh();
+      allow create: if rh() || (logado() && sistemaNovo() && request.resource.data.uid == request.auth.uid);
+      allow update, delete: if rh();
+    }
+
+    // Usuários do sistema (perfis de acesso)
+    match /usuarios/{uid} {
+      allow get: if logado() && (uid == request.auth.uid || rh());
+      allow list: if rh();
+      allow create: if rh() || (logado() && uid == request.auth.uid && sistemaNovo() && request.resource.data.perfis == ['rh']);
+      allow update: if rh() || (logado() && uid == request.auth.uid && soMudou(['trocarSenha']) && request.resource.data.trocarSenha == false);
+      allow delete: if rh();
+    }
+
+    // Dados de uso exclusivo do RH
+    match /funcionarios/{id}   { allow read, write: if rh(); }
+    match /ocorrencias/{id}    { allow read, write: if rh(); }
+    match /deptos/{id}         { allow read, write: if rh(); }
+    match /elegibilidade/{id}  { allow read, write: if rh(); }
+    match /historico/{id}      { allow read, write: if rh(); }
+
+    // Tabela salarial: RH importa; N2 (calibração) e Diretoria (Comitê) consultam
+    match /tabela/{id} {
+      allow read: if rh() || perfil('n2') || perfil('diretoria');
+      allow write: if rh();
+    }
+
+    // Questionários e ciclos: todos os usuários leem, só o RH altera
+    match /questionarios/{id}  { allow read: if temUsuario(); allow write: if rh(); }
+    match /ciclos/{id}         { allow read: if temUsuario(); allow write: if rh(); }
+
+    // Avaliações: cada avaliador vê e responde só as próprias, enquanto o ciclo estiver em avaliação
+    match /avaliacoes/{id} {
+      allow read: if rh() || (temUsuario() && resource.data.avaliador == minhaMat());
+      allow create, delete: if rh();
+      allow update: if rh() || (
+        temUsuario() && resource.data.avaliador == minhaMat()
+        && resource.data.status != 'enviada'
+        && get(caminho('ciclos', resource.data.ciclo)).data.etapa == 'avaliacao'
+        && soMudou(['notas', 'obs', 'comentario', 'status', 'atualizadaEm', 'enviadaEm'])
+        && request.resource.data.status in ['rascunho', 'enviada']
+      );
+    }
+
+    // Resultados: RH e Diretoria veem tudo; N2 vê e calibra só a própria área
+    match /resultados/{id} {
+      allow read: if rh() || perfil('diretoria') || (perfil('n2') && resource.data.n2 == minhaMat());
+      allow create, delete: if rh();
+      allow update: if rh() || (
+        perfil('n2') && resource.data.n2 == minhaMat()
+        && get(caminho('ciclos', resource.data.ciclo)).data.etapa == 'calibracao'
+        && soMudou(['boxCal', 'justCal', 'recMerito', 'justMerito', 'faixaProposta', 'projecao',
+                    'validadoN2', 'validadoEm', 'validadoPor'])
+      );
+    }
+
+    // Trilha de auditoria: qualquer usuário registra, só o RH lê
+    match /auditoria/{id} {
+      allow create: if temUsuario();
+      allow read: if rh();
+    }
+  }
+}
