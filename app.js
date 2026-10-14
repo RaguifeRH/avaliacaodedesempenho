@@ -107,6 +107,8 @@ const ETAPAS = [
   { id: "encerrado", t: "Encerrado", d: "Resultado disponível para consulta" },
 ];
 const STATUS_OK = ["ATIVO", "FERIAS"];
+/* fora da avaliação: cargo de diretor ou perfil Diretoria */
+const ehDiretoria = (f) => !!f && (f.nivel === "diretoria" || (f.perfis || []).includes("diretoria"));
 
 function nivelPorCargo(cargo) {
   const c = norm(cargo);

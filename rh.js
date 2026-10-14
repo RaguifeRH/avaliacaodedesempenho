@@ -144,7 +144,7 @@ async function gerarAvaliacoes() {
   const eleg = await DB.get("elegibilidade", c.id);
   if (!eleg || !eleg.congelada) { toast("Congele a lista de elegíveis antes.", true); return null; }
   const elegiveis = Object.keys(eleg.lista).filter((m) => eleg.lista[m].elegivel && funcs[m]);
-  const ativos = Object.values(funcs).filter((f) => ativoNaBase(f) && f.nivel !== "diretoria");
+  const ativos = Object.values(funcs).filter((f) => ativoNaBase(f) && !ehDiretoria(f));
   const problemas = []; const pares = {};
   const add = (avaliado, avaliador, papel) => {
     if (!avaliador || avaliador === avaliado.matricula) return;
@@ -425,7 +425,7 @@ function calcularElegibilidade(funcs, ocs, c, ajustes) {
   const lista = {};
   Object.values(funcs).filter((f) => f.naBase !== false).forEach((f) => {
     const mot = [];
-    if (f.nivel === "diretoria") mot.push("Diretoria — fora da avaliação");
+    if (ehDiretoria(f)) mot.push("Diretoria — fora da avaliação");
     if (!f.admissao) mot.push("Sem data de admissão");
     else if (f.admissao > c.corte) mot.push(`Admitido em ${fmtData(f.admissao)} (após ${fmtData(c.corte)})`);
     if (!STATUS_OK.includes(norm(f.status))) mot.push(`Status: ${f.status}`);
@@ -433,8 +433,8 @@ function calcularElegibilidade(funcs, ocs, c, ajustes) {
       mot.push(o.tipo === "afastamento" ? `Afastamento a partir de ${fmtData(o.data)}` : `${TIPOS_OC[o.tipo]} em ${fmtData(o.data)}`));
     let elegivel = !mot.length; let ajuste = null;
     const aj = ajustes && ajustes[f.matricula];
-    if (aj && f.nivel !== "diretoria") { elegivel = aj.elegivel; ajuste = aj.motivo; }
-    lista[f.matricula] = { elegivel, motivos: mot, ajuste, nome: f.nome, cargo: f.cargo || "", depto: f.depto || "", nivel: f.nivel, admissao: f.admissao || "" };
+    if (aj && !ehDiretoria(f)) { elegivel = aj.elegivel; ajuste = aj.motivo; }
+    lista[f.matricula] = { elegivel, motivos: mot, ajuste, diretoria: ehDiretoria(f), nome: f.nome, cargo: f.cargo || "", depto: f.depto || "", nivel: f.nivel, admissao: f.admissao || "" };
   });
   return lista;
 }
@@ -468,7 +468,7 @@ PAGES.elegibilidade = async (el) => {
     $("#el-body").innerHTML = rows.map((x) => `<tr><td><b>${esc(titulo(x.nome))}</b><span class="sub">${x.m} · ${esc(x.cargo)}</span></td><td>${esc(x.depto)}</td><td><span class="pill ${NIVEIS[x.nivel]?.pill}">${NIVEIS[x.nivel]?.t}</span></td><td>${fmtData(x.admissao)}</td>
       <td><span class="pill ${x.elegivel ? "p-ok" : "p-bad"}">${x.elegivel ? "Elegível" : "Inelegível"}</span></td>
       <td style="white-space:normal;max-width:340px">${esc(x.motivos.join(" · ")) || "—"}${x.ajuste ? `<span class="sub"><b>Ajuste manual:</b> ${esc(x.ajuste)}</span>` : ""}</td>
-      ${congelada ? "" : `<td>${x.nivel === "diretoria" ? "" : `<button class="btn btn-mini btn-ghost" data-aj="${x.m}">${x.ajuste ? "Desfazer ajuste" : x.elegivel ? "Excluir" : "Incluir"}</button>`}</td>`}</tr>`).join("") || `<tr><td colspan="7" class="empty">${arr.length ? "Nenhuma pessoa com esses filtros." : "Importe a base de funcionários."}</td></tr>`;
+      ${congelada ? "" : `<td>${x.diretoria || x.nivel === "diretoria" ? "" : `<button class="btn btn-mini btn-ghost" data-aj="${x.m}">${x.ajuste ? "Desfazer ajuste" : x.elegivel ? "Excluir" : "Incluir"}</button>`}</td>`}</tr>`).join("") || `<tr><td colspan="7" class="empty">${arr.length ? "Nenhuma pessoa com esses filtros." : "Importe a base de funcionários."}</td></tr>`;
     $$("[data-aj]").forEach((bt) => (bt.onclick = async () => {
       const m = bt.dataset.aj; const x = lista[m]; const aj = { ...(doc.ajustes || {}) };
       if (x.ajuste) { delete aj[m]; }
@@ -499,7 +499,7 @@ PAGES.avaliadores = async (el) => {
   const excecoes = base.filter((f) => f.avaliadorDireto);
   /* equipes: líder → liderados ativos (para conferir turnos/áreas com mais de um líder) */
   const equipes = {};
-  base.filter((f) => ativoNaBase(f) && f.nivel !== "diretoria").forEach((f) => { const l = avaliadorDireto(f); if (l) (equipes[l] = equipes[l] || []).push(f); });
+  base.filter((f) => ativoNaBase(f) && !ehDiretoria(f)).forEach((f) => { const l = avaliadorDireto(f); if (l) (equipes[l] = equipes[l] || []).push(f); });
   el.innerHTML = `<div class="page">${cabecalho("Quem avalia quem", "Avaliadores", "Defina, por departamento, quem avalia os operacionais, a liderança e os gestores, e quem é o N2 da área. Onde há mais de um líder (turno, área ou cargo), importe a planilha de líder direto por pessoa.")}
     <div class="note">O <b>líder direto</b> de cada pessoa vem da planilha (ou do ajuste em Funcionários) e, se não houver, da regra do departamento. Ele avalia a pessoa, e os seus <b>liderados</b> o avaliam: cada liderado responde só sobre o próprio líder. Os <b>pares</b> de um gestor são todos os outros gestores da empresa.</div>
     <div class="panel"><h2>Líder direto por pessoa (planilha)</h2><p class="desc">Use quando o setor tem mais de um líder, por turno, área ou cargo. Baixe o modelo, que já vem com todos os funcionários ativos, a escala e o líder atual; corrija a coluna <b>Chapa do líder</b> e importe. Vale sempre o último arquivo importado. Linha com <b>Chapa do líder</b> em branco volta para a regra do departamento; quem não estiver no arquivo não muda.</p>
@@ -512,12 +512,12 @@ PAGES.avaliadores = async (el) => {
       </tbody></table></div>${opcoesPessoas()}
       <div class="btn-row"><button class="btn btn-primary" id="bt-sav">Salvar regras</button></div></div>
     <div class="grid2">
-      <div class="panel"><h2>Diagnóstico</h2><p class="desc">Pessoas da base (exceto diretoria) sem avaliador direto.</p><div id="diag"></div></div>
+      <div class="panel"><h2>Diagnóstico</h2><p class="desc">Pessoas da base sem avaliador direto. Diretoria (cargo ou perfil) fica de fora, pois não é avaliada.</p><div id="diag"></div></div>
       <div class="panel"><h2>Equipes por líder</h2><p class="desc">Quantos liderados ativos cada líder tem e de quais escalas. Clique para ver os nomes.</p>
         ${Object.keys(equipes).length ? `<div class="table-wrap" style="max-height:320px"><table><thead><tr><th>Líder</th><th class="num">Liderados</th><th>Escalas</th></tr></thead><tbody>${Object.entries(equipes).sort((a, b) => nomeDe(a[0]).localeCompare(nomeDe(b[0]))).map(([l, fs]) => `<tr class="click" data-eq="${l}"><td><b>${esc(nomeDe(l))}</b><span class="sub">${esc(funcs[l]?.cargo || "")} · ${esc(funcs[l]?.depto || "")}</span></td><td class="num">${fs.length}</td><td>${[...new Set(fs.map((f) => f.escala || "—"))].map(esc).join("<br>")}</td></tr>`).join("")}</tbody></table></div>` : '<p class="empty">Nenhum líder definido ainda.</p>'}
         <p class="hint">${excecoes.length} pessoas com líder definido por pessoa; as demais seguem a regra do departamento.</p></div></div></div>`;
   const diag = () => {
-    const sem = base.filter((f) => f.nivel !== "diretoria" && !avaliadorDireto(f));
+    const sem = base.filter((f) => !ehDiretoria(f) && !avaliadorDireto(f));
     $("#diag").innerHTML = sem.length ? `<p style="margin:0 0 8px"><span class="pill p-warn">${sem.length} pessoas</span></p><div class="table-wrap" style="max-height:320px"><table><tbody>${sem.map((f) => `<tr class="click" data-m="${f.matricula}"><td><b>${esc(titulo(f.nome))}</b><span class="sub">${esc(f.cargo)}</span></td><td>${esc(f.depto)}</td><td><span class="pill ${NIVEIS[f.nivel].pill}">${NIVEIS[f.nivel].t}</span></td></tr>`).join("")}</tbody></table></div>` : '<p class="note" style="margin:0">Todos têm avaliador direto.</p>';
     $$("tr.click[data-m]").forEach((tr) => (tr.onclick = () => editarFuncionario(tr.dataset.m, () => ir("avaliadores"))));
   };
@@ -528,7 +528,7 @@ PAGES.avaliadores = async (el) => {
     $("#eq-ok", m).onclick = fecharModal;
   }));
   $("#bt-modelo-lider").onclick = () => {
-    const linhas = base.filter((f) => ativoNaBase(f) && f.nivel !== "diretoria")
+    const linhas = base.filter((f) => ativoNaBase(f) && !ehDiretoria(f))
       .sort((a, b) => (a.depto || "").localeCompare(b.depto || "") || (a.escala || "").localeCompare(b.escala || "") || a.nome.localeCompare(b.nome))
       .map((f) => { const l = avaliadorDireto(f); return { Chapa: f.matricula, Nome: titulo(f.nome), Cargo: f.cargo || "", Nível: NIVEIS[f.nivel]?.t || "", Departamento: f.depto || "", Escala: f.escala || "", "Chapa do líder": l || "", "Nome do líder (conferência)": l ? nomeDe(l) : "" }; });
     baixarXLSX(linhas, "Lider direto", `lider_direto_${hojeISO()}.xlsx`);
@@ -724,7 +724,7 @@ PAGES.acessos = async (el) => {
 /* quem é líder direto de alguém da base ativa */
 function lideresDiretos(funcs) {
   const s = new Set();
-  Object.values(funcs).forEach((f) => { if (ativoNaBase(f) && f.nivel !== "diretoria") { const l = avaliadorDireto(f); if (l) s.add(l); } });
+  Object.values(funcs).forEach((f) => { if (ativoNaBase(f) && !ehDiretoria(f)) { const l = avaliadorDireto(f); if (l) s.add(l); } });
   return s;
 }
 /* CPF: operacional, sem perfil e que não lidera ninguém (só avalia o próprio líder) */

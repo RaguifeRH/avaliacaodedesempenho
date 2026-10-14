@@ -82,7 +82,7 @@ function projExport(r) {
 PAGES.tabela = async (el) => {
   const tab = await carregarTabela(true);
   const funcs = await carregarFuncs();
-  const base = Object.values(funcs).filter((f) => f.naBase !== false && f.nivel !== "diretoria");
+  const base = Object.values(funcs).filter((f) => f.naBase !== false && !ehDiretoria(f));
   const semCargo = tab ? base.filter((f) => !acharLinha(tab, f.cargo, f.depto)) : [];
   const semFaixa = base.filter((f) => !FAIXAS_SAL.includes(String(f.faixa || "").toUpperCase()));
   el.innerHTML = `<div class="page">${cabecalho("Remuneração", "Tabela salarial", "Valores por cargo e faixa (A a F). A calibração usa esta tabela para projetar o ajuste por mérito: valor da faixa atual da pessoa → valor da faixa seguinte. Importe de novo sempre que a tabela for atualizada.")}
