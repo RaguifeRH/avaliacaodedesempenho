@@ -81,7 +81,8 @@ PAGES.ciclos = async (el) => {
   if (todos.length) {
     html += `<div class="panel"><h2>Histórico</h2><div class="table-wrap"><table><thead><tr><th>Ciclo</th><th>Etapa</th><th>Admissão até</th><th>Período</th><th></th></tr></thead><tbody>
       ${todos.map((x) => `<tr><td><b>${esc(x.rotulo)}</b></td><td><span class="pill ${x.etapa === "encerrado" ? "p-neutral" : "p-ok"}">${ETAPAS.find((e) => e.id === x.etapa).t}</span></td><td>${fmtData(x.corte)}</td><td>${fmtData(x.periodoIni)} a ${fmtData(x.periodoFim)}</td>
-      <td>${S.cfg.cicloAtivo === x.id ? '<span class="pill p-verde">ativo</span>' : x.etapa === "encerrado" && (!c || c.etapa === "encerrado") ? `<button class="btn btn-mini btn-ghost" data-ativar="${x.id}">Consultar</button>` : ""}</td></tr>`).join("")}
+      <td style="white-space:nowrap">${S.cfg.cicloAtivo === x.id ? '<span class="pill p-verde">ativo</span>' : x.etapa === "encerrado" && (!c || c.etapa === "encerrado") ? `<button class="btn btn-mini btn-ghost" data-ativar="${x.id}">Consultar</button>` : ""}
+        ${ehRH() ? ` <button class="btn btn-mini btn-danger" data-excluir="${x.id}">Excluir</button>` : ""}</td></tr>`).join("")}
     </tbody></table></div></div>`;
   }
   el.innerHTML = html + `</div>`;
@@ -100,6 +101,7 @@ PAGES.ciclos = async (el) => {
   }));
   $$("[data-ativar]").forEach((b) => (b.onclick = async () => { await DB.update("config", "geral", { cicloAtivo: b.dataset.ativar }); await recarregarCiclo(); ir("ciclos"); }));
   ligarHistorico();
+  $$("[data-excluir]").forEach((b) => (b.onclick = () => excluirCiclo(todos.find((x) => x.id === b.dataset.excluir))));
   $("#c-prazo") && ($("#c-prazo").onchange = async (e) => { await DB.update("ciclos", c.id, { prazo: e.target.value || null }); await recarregarCiclo(); toast("Prazo salvo."); ir("ciclos"); });
   const mudarEtapa = async (nova) => { await DB.update("ciclos", c.id, { etapa: nova, [`etapaEm_${nova}`]: agoraISO() }); await auditar("etapa", `${c.id} → ${nova}`); await recarregarCiclo(); };
   $("#bt-gerar") && ($("#bt-gerar").onclick = (e) => comBotao(e.currentTarget, async () => {
@@ -136,6 +138,30 @@ PAGES.ciclos = async (el) => {
     await mudarEtapa(ETAPAS[i - 1].id); ir("ciclos");
   });
 };
+
+/* -------- exclusão de ciclo (testes ou ciclo aberto por engano) -------- */
+async function excluirCiclo(x) {
+  if (!x) return;
+  const [avs, res] = await Promise.all([DB.list("avaliacoes", [["ciclo", "==", x.id]]), DB.list("resultados", [["ciclo", "==", x.id]])]);
+  const m = modal(`<h3>Excluir o ciclo ${esc(x.rotulo)}</h3>
+    <p style="margin-top:0">Serão apagados de forma definitiva: o ciclo, a lista de elegibilidade, <b>${avs.length} avaliações</b> (com as respostas) e <b>${res.length} resultados</b> (calibração, Comitê e cartas).</p>
+    <p>A base de funcionários, as ocorrências, os avaliadores, os questionários, os acessos e a tabela salarial <b>não</b> são afetados.</p>
+    ${x.etapa === "encerrado" ? `<p class="note bad">Este ciclo já foi encerrado. A data do último reajuste gravada nos aprovados não é desfeita; corrija em Funcionários, se for o caso.</p>` : ""}
+    <div class="fld"><label>Para confirmar, digite EXCLUIR</label><input id="ex-conf" autocomplete="off"></div>
+    <div class="btn-row"><button class="btn btn-danger" id="ex-ok" disabled>Excluir ciclo</button><button class="btn btn-ghost" onclick="fecharModal()">Cancelar</button></div>`);
+  $("#ex-conf", m).oninput = (e) => ($("#ex-ok", m).disabled = e.target.value.trim().toUpperCase() !== "EXCLUIR");
+  $("#ex-ok", m).onclick = (e) => comBotao(e.currentTarget, async () => {
+    await DB.batch([
+      ...avs.map((a) => ({ op: "delete", col: "avaliacoes", id: a.id })),
+      ...res.map((r) => ({ op: "delete", col: "resultados", id: r.id })),
+      { op: "delete", col: "elegibilidade", id: x.id },
+      { op: "delete", col: "ciclos", id: x.id },
+    ]);
+    if (S.cfg && S.cfg.cicloAtivo === x.id) await DB.update("config", "geral", { cicloAtivo: null });
+    await auditar("excluir_ciclo", `${x.id}: ${avs.length} avaliações, ${res.length} resultados`);
+    await recarregarCiclo(); fecharModal(); toast(`Ciclo ${x.rotulo} excluído.`); ir("ciclos");
+  });
+}
 
 /* -------- geração das avaliações (avaliador × avaliado) -------- */
 async function gerarAvaliacoes() {
