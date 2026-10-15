@@ -347,7 +347,9 @@ function telaLogin(msg) {
       const bruto = $("#l-mat").value.trim();
       if (bruto.includes("@")) {
         if (!ehEmail(bruto)) { msgEl.textContent = "E-mail inválido."; return; }
-        try { await AUTH.login(bruto.toLowerCase(), $("#l-senha").value); } catch (er) { msgEl.textContent = erroAmigavel(er); }
+        const em = bruto.toLowerCase();
+        const la = await DB.get("logins", "em_" + em).catch(() => null);
+        try { await AUTH.login(la ? la.email : em, $("#l-senha").value); } catch (er) { msgEl.textContent = erroAmigavel(er); }
         return;
       }
       const dig = soDig(bruto);
@@ -368,13 +370,15 @@ function telaRecuperar(emailIni) {
       <button class="btn btn-ghost" style="width:100%;margin-top:8px" type="button" id="r-voltar">Voltar</button>
       <div class="auth-msg" id="r-msg"></div>
     </form>
-    <p class="auth-help">Você receberá um link para criar uma nova senha. Se não chegar em alguns minutos, confira a caixa de spam.<br>Funcionários que entram por matrícula ou CPF devem procurar o RH.</p>`);
+    <p class="auth-help"><b>O caminho mais rápido:</b> peça a outro administrador para clicar em <b>Gerar nova senha</b> na tela Administradores.<br>Funcionários que entram por matrícula ou CPF devem procurar o RH.</p>`);
   $("#r-voltar").onclick = () => telaLogin();
   $("#f-rec").onsubmit = async (e) => {
     e.preventDefault();
     const email = $("#r-email").value.trim().toLowerCase(), msgEl = $("#r-msg");
     if (!ehEmail(email)) { msgEl.textContent = "E-mail inválido."; return; }
     await comBotao($("#f-rec button[type=submit]"), async () => {
+      /* contas criadas na tela Administradores usam login interno: a senha nova é gerada por outro administrador */
+      if (await DB.get("logins", "em_" + email).catch(() => null)) { msgEl.style.color = ""; msgEl.textContent = "Peça a outro administrador para gerar uma nova senha em Administradores."; return; }
       try {
         await AUTH.resetPassword(email);
         msgEl.style.color = "var(--okc)";
