@@ -86,6 +86,8 @@
         const r = await auth.createUserWithEmailAndPassword(email, senha);
         return r.user.uid;
       },
+      /* link de criação/recuperação de senha (só contas com e-mail real: administradores) */
+      async resetPassword(email) { auth.languageCode = "pt-BR"; await auth.sendPasswordResetEmail(email); },
       currentUid() { return auth.currentUser ? auth.currentUser.uid : null; },
     };
     return { DB, AUTH };
@@ -168,6 +170,7 @@
         return uid;
       },
       async createSelf(email, senha) { const uid = await AUTH.createUser(email, senha); setSess(uid); return uid; },
+      async resetPassword() { throw err("demo/sem-email"); },
       currentUid() { return sess; },
       /* só no modo demonstração */
       resetDemo() { try { localStorage.removeItem(KEY); sessionStorage.removeItem(SKEY); } catch (e) {} location.reload(); },

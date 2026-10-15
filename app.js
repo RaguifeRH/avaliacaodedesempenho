@@ -39,6 +39,8 @@ const emailDe = (mat, v) => `m${mat}.v${v || 0}@${window.DOMINIO_LOGIN}`;
 /* acesso por CPF (operacionais que só avaliam o líder): usuário e senha = CPF, fixo */
 const emailCPF = (mat, v) => `m${mat}.cpf.v${v || 0}@${window.DOMINIO_LOGIN}`;
 const soDig = (v) => String(v ?? "").replace(/\D/g, "");
+/* administradores entram com e-mail real (ex.: e-mail do setor de RH) e não fazem parte da base de funcionários */
+const ehEmail = (v) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(v ?? "").trim());
 const padCPF = (v) => { const d = soDig(v); return d && d.length <= 11 ? d.padStart(11, "0") : d; };
 function cpfValido(v) {
   const c = soDig(v);
@@ -75,6 +77,9 @@ function erroAmigavel(e) {
   if (/requires-recent-login/.test(c)) return "Por segurança, saia e entre de novo antes de alterar a senha.";
   if (/permission|insufficient/.test(c)) return "Você não tem permissão para esta ação.";
   if (/network|unavailable|offline/.test(c)) return "Sem conexão com o servidor. Verifique a internet.";
+  if (/email-already-in-use/.test(c)) return "Este e-mail já tem uma conta no Firebase. Apague-a em Authentication → Usuários e tente de novo.";
+  if (/invalid-email/.test(c)) return "E-mail inválido.";
+  if (/demo\/sem-email/.test(c)) return "No modo demonstração não há envio de e-mail.";
   return typeof c === "string" ? c : "Erro inesperado.";
 }
 function baixarXLSX(linhas, nomeAba, arquivo) {
@@ -199,6 +204,7 @@ const IC = {
   mail: '<rect x="3" y="5" width="18" height="14"/><path d="M3 6l9 7 9-7"/>',
   money: '<rect x="2" y="6" width="20" height="12"/><circle cx="12" cy="12" r="3"/><path d="M6 9v.01M18 15v.01"/>',
   pulse: '<path d="M3 12h4l3-8 4 16 3-8h4"/>',
+  shield: '<path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"/><path d="M9 12l2 2 4-4"/>',
 };
 const icon = (k) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[k] || ""}</svg>`;
 function logoSVG(size) {
@@ -224,6 +230,7 @@ const NAV = [
     { id: "questionarios", t: "Questionários", ic: "list", ver: ehRH },
     { id: "tabela", t: "Tabela salarial", ic: "money", ver: ehRH },
     { id: "acessos", t: "Acessos e senhas", ic: "key", ver: ehRH },
+    { id: "admins", t: "Administradores", ic: "shield", ver: ehRH },
     { id: "acompanhamento", t: "Acompanhamento", ic: "pulse", ver: ehRH },
   ] },
   { grp: "Resultados", itens: [
@@ -326,22 +333,53 @@ function telaAuth(conteudo) {
 function telaLogin(msg) {
   telaAuth(`<div class="eyebrow-mod">Acesso</div><h2>Entrar</h2>
     <form id="f-login" autocomplete="on">
-      <div class="fld"><label for="l-mat">Matrícula ou CPF</label><input id="l-mat" inputmode="numeric" autocomplete="username" required placeholder="Matrícula (0200802) ou CPF, só números"></div>
+      <div class="fld"><label for="l-mat">Matrícula, CPF ou e-mail</label><input id="l-mat" autocomplete="username" required placeholder="Matrícula (0200802) ou CPF, só números"></div>
       <div class="fld"><label for="l-senha">Senha</label><input id="l-senha" type="password" autocomplete="current-password" required></div>
       <button class="btn btn-primary" style="width:100%" type="submit">Entrar</button>
       <div class="auth-msg" id="l-msg">${esc(msg || "")}</div>
     </form>
-    <p class="auth-help"><b>Operacionais:</b> digite o seu CPF, só números, no usuário e na senha.<br><b>Líderes e gestores:</b> use a matrícula (chapa) e a senha entregue pelo RH; no primeiro acesso, você cria uma senha nova.<br>Problemas para entrar? Procure o RH.</p>`);
+    <p class="auth-help"><b>Operacionais:</b> digite o seu CPF, só números, no usuário e na senha.<br><b>Líderes e gestores:</b> use a matrícula (chapa) e a senha entregue pelo RH; no primeiro acesso, você cria uma senha nova.<br><b>Administradores:</b> entram com o e-mail. <button type="button" class="btn-link" id="l-esqueci">Esqueci minha senha</button><br>Problemas para entrar? Procure o RH.</p>`);
+  $("#l-esqueci").onclick = () => telaRecuperar(ehEmail($("#l-mat").value) ? $("#l-mat").value.trim() : "");
   $("#f-login").onsubmit = async (e) => {
     e.preventDefault();
     const btn = $("#f-login button"); const msgEl = $("#l-msg"); msgEl.textContent = "";
     await comBotao(btn, async () => {
-      const dig = soDig($("#l-mat").value);
+      const bruto = $("#l-mat").value.trim();
+      if (bruto.includes("@")) {
+        if (!ehEmail(bruto)) { msgEl.textContent = "E-mail inválido."; return; }
+        try { await AUTH.login(bruto.toLowerCase(), $("#l-senha").value); } catch (er) { msgEl.textContent = erroAmigavel(er); }
+        return;
+      }
+      const dig = soDig(bruto);
       const porCPF = dig.length === 11;
       const id = porCPF ? "cpf_" + dig : padMat(dig);
       const l = dig ? await DB.get("logins", id) : null;
       if (!l) { msgEl.textContent = porCPF ? "CPF sem acesso cadastrado. Procure o RH." : "Matrícula sem acesso cadastrado. Procure o RH."; return; }
       try { await AUTH.login(l.email, $("#l-senha").value); } catch (er) { msgEl.textContent = erroAmigavel(er); }
+    });
+  };
+}
+/* recuperação de senha: só para administradores (conta com e-mail real) */
+function telaRecuperar(emailIni) {
+  telaAuth(`<div class="eyebrow-mod">Administradores</div><h2>Recuperar senha</h2>
+    <form id="f-rec">
+      <div class="fld"><label for="r-email">E-mail do administrador</label><input id="r-email" type="email" autocomplete="username" required value="${esc(emailIni || "")}"></div>
+      <button class="btn btn-primary" style="width:100%" type="submit">Enviar link</button>
+      <button class="btn btn-ghost" style="width:100%;margin-top:8px" type="button" id="r-voltar">Voltar</button>
+      <div class="auth-msg" id="r-msg"></div>
+    </form>
+    <p class="auth-help">Você receberá um link para criar uma nova senha. Se não chegar em alguns minutos, confira a caixa de spam.<br>Funcionários que entram por matrícula ou CPF devem procurar o RH.</p>`);
+  $("#r-voltar").onclick = () => telaLogin();
+  $("#f-rec").onsubmit = async (e) => {
+    e.preventDefault();
+    const email = $("#r-email").value.trim().toLowerCase(), msgEl = $("#r-msg");
+    if (!ehEmail(email)) { msgEl.textContent = "E-mail inválido."; return; }
+    await comBotao($("#f-rec button[type=submit]"), async () => {
+      try {
+        await AUTH.resetPassword(email);
+        msgEl.style.color = "var(--okc)";
+        msgEl.textContent = "Se este e-mail for de um administrador, o link foi enviado.";
+      } catch (er) { msgEl.style.color = ""; msgEl.textContent = /user-not-found/.test(er.code || "") ? "Se este e-mail for de um administrador, o link foi enviado." : erroAmigavel(er); }
     });
   };
 }
@@ -372,9 +410,9 @@ function telaTrocaSenha(voluntaria) {
 }
 function telaSetup() {
   telaAuth(`<div class="eyebrow-mod">Primeira configuração</div><h2>Criar acesso do RH</h2>
-    <p class="auth-help" style="margin:-6px 0 14px">Este sistema ainda não tem usuários. Cadastre o primeiro responsável do RH; os demais acessos são gerados depois, dentro do sistema.</p>
+    <p class="auth-help" style="margin:-6px 0 14px">Este sistema ainda não tem usuários. Cadastre o primeiro administrador. Use o <b>e-mail do setor de RH</b> para uma conta que não entra na avaliação, ou uma matrícula. Os demais acessos são gerados depois, dentro do sistema.</p>
     <form id="f-setup">
-      <div class="fld"><label>Matrícula</label><input id="u-mat" required inputmode="numeric"></div>
+      <div class="fld"><label>E-mail do setor ou matrícula</label><input id="u-mat" required placeholder="rh@empresa.com.br"></div>
       <div class="fld"><label>Nome completo</label><input id="u-nome" required></div>
       <div class="fld"><label>Senha</label><input id="u-s1" type="password" minlength="6" required></div>
       <div class="fld"><label>Repita a senha</label><input id="u-s2" type="password" minlength="6" required></div>
@@ -383,12 +421,25 @@ function telaSetup() {
     </form>`);
   $("#f-setup").onsubmit = async (e) => {
     e.preventDefault();
-    const mat = padMat($("#u-mat").value), nome = $("#u-nome").value.trim().toUpperCase(), s1 = $("#u-s1").value;
-    if (!mat) return ($("#u-msg").textContent = "Informe a matrícula.");
+    const bruto = $("#u-mat").value.trim(), nome = $("#u-nome").value.trim().toUpperCase(), s1 = $("#u-s1").value;
+    const porEmail = bruto.includes("@");
+    const mat = porEmail ? bruto.toLowerCase() : padMat(bruto);
+    if (porEmail && !ehEmail(bruto)) return ($("#u-msg").textContent = "E-mail inválido.");
+    if (!mat) return ($("#u-msg").textContent = "Informe o e-mail ou a matrícula.");
     if (s1 !== $("#u-s2").value) return ($("#u-msg").textContent = "As senhas não conferem.");
     await comBotao($("#f-setup button"), async () => {
       S.boot = true;
       try {
+        if (porEmail) {
+          const uid = await AUTH.createSelf(mat, s1);
+          await DB.batch([
+            { col: "usuarios", id: uid, data: { matricula: mat, email: mat, nome, perfis: ["rh"], tipoAcesso: "email", trocarSenha: false, criadoEm: agoraISO() } },
+            { col: "config", id: "geral", data: { criadoEm: agoraISO(), cicloAtivo: null } },
+          ]);
+          await DB.batch(Object.keys(PUBLICOS).map((p) => ({ col: "questionarios", id: p, data: { publico: p, competencias: window.MATRIZ_2026[p], atualizadoEm: agoraISO() } })));
+          S.boot = false;
+          return await aoMudarSessao({ uid });
+        }
         const email = emailDe(mat, 0);
         const uid = await AUTH.createSelf(email, s1);
         await DB.batch([
@@ -416,10 +467,11 @@ async function aoMudarSessao(u) {
   if (!u) {
     S.me = null;
     const cfg = await DB.get("config", "geral").catch(() => null);
-    return cfg ? telaLogin() : telaSetup();
+    const aviso = S.avisoLogin; S.avisoLogin = null;
+    return cfg ? telaLogin(aviso) : telaSetup();
   }
   const me = await DB.get("usuarios", u.uid).catch(() => null);
-  if (!me) { await AUTH.logout(); return telaLogin("Este acesso foi desativado ou reiniciado. Procure o RH."); }
+  if (!me || me.removido) { const av = "Este acesso foi desativado ou reiniciado. Procure o RH."; S.avisoLogin = av; await AUTH.logout(); return telaLogin(av); }
   S.me = { ...me, uid: u.uid };
   if (me.trocarSenha) return telaTrocaSenha(false);
   await entrarNoApp();

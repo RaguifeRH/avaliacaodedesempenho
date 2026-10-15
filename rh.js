@@ -831,3 +831,67 @@ PAGES.acompanhamento = async (el) => {
     $$("[data-reab]", m).forEach((b) => (b.onclick = async () => { await DB.update("avaliacoes", b.dataset.reab, { status: "rascunho" }); await auditar("reabrir_avaliacao", b.dataset.reab); fecharModal(); toast("Avaliação reaberta."); ir("acompanhamento"); }));
   }
 };
+
+/* ================= ADMINISTRADORES (login por e-mail) =================
+   Contas que entram com e-mail real (ex.: e-mail do setor de RH). Ficam só em "usuarios":
+   não estão na base de funcionários, então não são avaliadas, não entram em relatórios
+   e não são afetadas pela importação da folha. A senha é criada pela própria pessoa,
+   pelo link enviado ao e-mail, e pode ser recuperada em "Esqueci minha senha". */
+PAGES.admins = async (el) => {
+  const us = await DB.list("usuarios");
+  const adms = us.filter((u) => u.tipoAcesso === "email" && !u.removido).sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
+  const rhMat = us.filter((u) => u.tipoAcesso !== "email" && !u.removido && (u.perfis || []).includes("rh")).sort((a, b) => (a.nome || "").localeCompare(b.nome || ""));
+  const demo = window.MODO_DADOS !== "firebase";
+  el.innerHTML = `<div class="page">${cabecalho("Acesso administrativo", "Administradores", "Contas de administrador que entram pelo <b>e-mail</b>, como o e-mail do setor de RH. Elas não fazem parte da base de funcionários: não são avaliadas, não aparecem em relatórios e não mudam com a importação da folha. Cada pessoa cria a própria senha pelo link enviado ao e-mail e pode recuperá-la em <b>Esqueci minha senha</b>, na tela de login.")}
+    <div class="panel"><h2>Novo administrador</h2><p class="desc">O administrador tem acesso completo do RH. ${demo ? "No modo demonstração não há envio de e-mail: a senha inicial aparece na tela." : "Ao salvar, o sistema envia ao e-mail um link para criar a senha. Se não chegar, peça para conferir o spam ou use Reenviar link."}</p>
+      <div class="form-grid"><div class="fld"><label>Nome</label><input id="ad-nome" placeholder="Ex.: RH Raguife"></div>
+        <div class="fld" style="grid-column:span 2"><label>E-mail</label><input id="ad-email" type="email" placeholder="rh@empresa.com.br"></div></div>
+      <div class="btn-row"><button class="btn btn-primary" id="ad-ok">Cadastrar administrador</button></div></div>
+    <div class="panel"><h2>Administradores por e-mail</h2><p class="desc">${adms.length} conta${adms.length === 1 ? "" : "s"}.</p>
+      <div class="table-wrap"><table><thead><tr><th>Nome</th><th>E-mail</th><th>Cadastrado em</th><th></th></tr></thead><tbody>
+      ${adms.map((u) => `<tr><td><b>${esc(titulo(u.nome))}</b>${u.id === S.me.uid ? ' <span class="pill p-verde">você</span>' : ""}</td><td>${esc(u.email)}</td><td>${fmtData(u.criadoEm)}</td>
+        <td style="white-space:nowrap">${demo ? "" : `<button class="btn btn-mini btn-ghost" data-link="${esc(u.email)}">Reenviar link de senha</button> `}${u.id === S.me.uid ? "" : `<button class="btn btn-mini btn-danger" data-rem="${u.id}">Remover</button>`}</td></tr>`).join("") || `<tr><td colspan="4" class="empty">Nenhum administrador por e-mail ainda.</td></tr>`}
+      </tbody></table></div></div>
+    <div class="panel"><h2>Perfil RH por matrícula</h2><p class="desc">Funcionários com perfil RH também administram o sistema e continuam sendo avaliados normalmente. Para tirar o acesso administrativo de alguém, desmarque o perfil RH em <button class="btn-link" onclick="ir('funcionarios')">Funcionários</button>; o acesso de avaliador continua.</p>
+      ${rhMat.length ? `<table><tbody>${rhMat.map((u) => `<tr><td><b>${esc(titulo(u.nome))}</b>${u.id === S.me.uid ? ' <span class="pill p-verde">você</span>' : ""}</td><td>${esc(u.matricula)}</td></tr>`).join("")}</tbody></table>` : '<p class="empty" style="padding:8px 0">Nenhum funcionário com perfil RH.</p>'}</div></div>`;
+
+  $("#ad-ok").onclick = (ev) => comBotao(ev.currentTarget, async () => {
+    const nome = $("#ad-nome").value.trim().toUpperCase(), email = $("#ad-email").value.trim().toLowerCase();
+    if (!nome) return toast("Informe o nome.", true);
+    if (!ehEmail(email)) return toast("E-mail inválido.", true);
+    const ex = us.find((u) => (u.email || "").toLowerCase() === email);
+    if (ex && !ex.removido) return toast("Este e-mail já é administrador.", true);
+    let senha = null;
+    if (ex) await DB.update("usuarios", ex.id, { nome, perfis: ["rh"], removido: false, reativadoEm: agoraISO(), reativadoPor: S.me.matricula });
+    else {
+      senha = senhaAleatoria() + senhaAleatoria();
+      const uid = await AUTH.createUser(email, senha);
+      await DB.set("usuarios", uid, { matricula: email, email, nome, perfis: ["rh"], tipoAcesso: "email", trocarSenha: false, criadoEm: agoraISO(), criadoPor: S.me.matricula });
+    }
+    await auditar(ex ? "reativar_admin" : "criar_admin", email);
+    if (demo) {
+      const m = modal(`<h3>Administrador cadastrado</h3><p style="margin-top:0">${esc(email)}</p>${senha ? `<p>Senha inicial (modo demonstração):</p><div style="font-family:var(--display);font-stretch:75%;font-weight:900;font-size:40px;color:var(--verde)">${esc(senha)}</div>` : "<p>Acesso reativado com a senha anterior.</p>"}<div class="btn-row"><button class="btn btn-primary" id="ad-f">Fechar</button></div>`);
+      $("#ad-f", m).onclick = () => { fecharModal(); ir("admins"); };
+      return;
+    }
+    let enviado = true;
+    try { await AUTH.resetPassword(email); } catch (e) { enviado = false; }
+    const m = modal(`<h3>Administrador cadastrado</h3><p style="margin-top:0"><b>${esc(email)}</b></p>
+      <p>${enviado ? "Enviamos para este e-mail um link para criar a senha. Depois é só entrar na tela de login com o e-mail e a senha criada." : "A conta foi criada, mas o e-mail com o link não foi enviado. Use <b>Reenviar link de senha</b> na lista."}</p>
+      <p class="hint">O link vem de noreply@ do Firebase e pode cair no spam.</p><div class="btn-row"><button class="btn btn-primary" id="ad-f">Fechar</button></div>`);
+    $("#ad-f", m).onclick = () => { fecharModal(); ir("admins"); };
+  });
+
+  $$("[data-link]").forEach((b) => (b.onclick = () => comBotao(b, async () => {
+    await AUTH.resetPassword(b.dataset.link); await auditar("reenviar_link_admin", b.dataset.link);
+    toast("Link enviado para " + b.dataset.link + ".");
+  })));
+
+  $$("[data-rem]").forEach((b) => (b.onclick = async () => {
+    const u = adms.find((x) => x.id === b.dataset.rem); if (!u) return;
+    if (adms.length + rhMat.length <= 1) return toast("Não é possível remover o último administrador.", true);
+    if (!(await confirmar("Remover administrador", `<b>${esc(u.email)}</b> não conseguirá mais entrar no sistema. Você pode cadastrá-lo de novo depois.`, "Remover", true))) return;
+    await DB.update("usuarios", u.id, { perfis: [], removido: true, removidoEm: agoraISO(), removidoPor: S.me.matricula });
+    await auditar("remover_admin", u.email); toast("Administrador removido."); ir("admins");
+  }));
+};
